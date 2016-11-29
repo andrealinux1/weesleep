@@ -23,7 +23,7 @@ WEECHAT_PLUGIN_LICENSE("GPL3");
 struct t_weechat_plugin* weechat_plugin = NULL;
 struct t_hook* child_process;
 
-int my_process_cb(void* data, const char* command, int return_code, const char* out, const char* err)
+int my_process_cb(const void* pointer, void* data, const char* command, int return_code, const char* out, const char* err)
 {
     if (return_code == WEECHAT_HOOK_PROCESS_ERROR) {
         weechat_printf (NULL, TAG "Subprocess died or failed to launch. Make sure '%s' exists and works as intended.", command);
@@ -64,7 +64,7 @@ int weechat_plugin_init(struct t_weechat_plugin* plugin, int argc, char* argv[])
     weechat_hashtable_set(options, "buffer_flush", "1");
 
     /* Fork off child process and have weechat notify us whenever it writes anything to stdout. */
-    child_process = weechat_hook_process_hashtable("~/.weechat/plugins/themagic", options, 0, &my_process_cb, NULL);
+    child_process = weechat_hook_process_hashtable("~/.weechat/plugins/themagic", options, 0, my_process_cb, NULL, NULL);
 
     weechat_hashtable_free(options);
 
