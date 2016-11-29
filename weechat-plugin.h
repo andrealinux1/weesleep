@@ -1,7 +1,7 @@
 /*
  * weechat-plugin.h - header to compile WeeChat plugins
  *
- * Copyright (C) 2003-2015 Sébastien Helleu <flashcode@flashtux.org>
+ * Copyright (C) 2003-2016 Sébastien Helleu <flashcode@flashtux.org>
  *
  * This file is part of WeeChat, the extensible chat client.
  *
@@ -57,7 +57,7 @@ struct timeval;
  * please change the date with current one; for a second change at same
  * date, increment the 01, otherwise please keep 01.
  */
-#define WEECHAT_PLUGIN_API_VERSION "20150114-01"
+#define WEECHAT_PLUGIN_API_VERSION "20160423-01"
 
 /* macros for defining plugin infos */
 #define WEECHAT_PLUGIN_NAME(__name)                                     \
@@ -138,11 +138,16 @@ struct timeval;
 
 /*
  * process return code (for callback):
- *   if >= 0, then process ended and it's return code of command
- *   if  < 0, then it's running or error
+ *   if >= 0, the process ended and it's return code of command
+ *   if -1, the process is still running
+ *   if -2, the process ended with an error
+ *   if -3, the callback is called in the child process (exec of function)
+ *          (note: the return code -3 is NEVER sent to script plugins,
+ *           it can be used only in C API)
  */
 #define WEECHAT_HOOK_PROCESS_RUNNING                -1
 #define WEECHAT_HOOK_PROCESS_ERROR                  -2
+#define WEECHAT_HOOK_PROCESS_CHILD                  -3
 
 /* connect status for connection hooked */
 #define WEECHAT_HOOK_CONNECT_OK                     0
@@ -269,13 +274,17 @@ struct t_weechat_plugin
                               int max, int range);
     int (*strcmp_ignore_chars) (const char *string1, const char *string2,
                                 const char *chars_ignored, int case_sensitive);
-    char *(*strcasestr) (const char *string, const char *search);
+    const char *(*strcasestr) (const char *string, const char *search);
     int (*strlen_screen) (const char *string);
     int (*string_match) (const char *string, const char *mask,
                          int case_sensitive);
     char *(*string_replace) (const char *string, const char *search,
                              const char *replace);
     char *(*string_expand_home) (const char *path);
+    char *(*string_eval_path_home) (const char *path,
+                                    struct t_hashtable *pointers,
+                                    struct t_hashtable *extra_vars,
+                                    struct t_hashtable *options);
     char *(*string_remove_quotes) (const char *string, const char *quotes);
     char *(*string_strip) (const char *string, int left, int right,
                            const char *chars);
@@ -290,7 +299,8 @@ struct t_weechat_plugin
     char *(*string_replace_regex) (const char *string, void *regex,
                                    const char *replace,
                                    const char reference_char,
-                                   char *(*callback)(void *data, const char *text),
+                                   char *(*callback)(void *data,
+                                                     const char *text),
                                    void *callback_data);
     char **(*string_split) (const char *string, const char *separators,
                             int keep_eol, int num_items_max, int *num_items);
@@ -304,6 +314,9 @@ struct t_weechat_plugin
     char *(*string_remove_color) (const char *string, const char *replacement);
     void (*string_encode_base64) (const char *from, int length, char *to);
     int (*string_decode_base64) (const char *from, char *to);
+    char *(*string_hex_dump) (const char *data, int data_size,
+                              int bytes_per_line, const char *prefix,
+                              const char *suffix);
     int (*string_is_command_char) (const char *string);
     const char *(*string_input_for_buffer) (const char *string);
     char *(*string_eval_expression )(const char *expr,
@@ -313,10 +326,11 @@ struct t_weechat_plugin
 
     /* UTF-8 strings */
     int (*utf8_has_8bits) (const char *string);
-    int (*utf8_is_valid) (const char *string, char **error);
+    int (*utf8_is_valid) (const char *string, int length, char **error);
     void (*utf8_normalize) (char *string, char replacement);
-    char *(*utf8_prev_char) (const char *string_start, const char *string);
-    char *(*utf8_next_char) (const char *string);
+    const char *(*utf8_prev_char) (const char *string_start,
+                                   const char *string);
+    const char *(*utf8_next_char) (const char *string);
     int (*utf8_char_int) (const char *string);
     int (*utf8_char_size) (const char *string);
     int (*utf8_strlen) (const char *string);
@@ -325,7 +339,7 @@ struct t_weechat_plugin
     int (*utf8_charcmp) (const char *string1, const char *string2);
     int (*utf8_charcasecmp) (const char *string1, const char *string2);
     int (*utf8_char_size_screen) (const char *string);
-    char *(*utf8_add_offset) (const char *string, int offset);
+    const char *(*utf8_add_offset) (const char *string, int offset);
     int (*utf8_real_pos) (const char *string, int pos);
     int (*utf8_pos) (const char *string, int real_pos);
     char *(*utf8_strndup) (const char *string, int length);
@@ -334,15 +348,16 @@ struct t_weechat_plugin
     int (*mkdir_home) (const char *directory, int mode);
     int (*mkdir) (const char *directory, int mode);
     int (*mkdir_parents) (const char *directory, int mode);
-    void (*exec_on_files) (const char *directory, int hidden_files, void *data,
-                           void (*callback)(void *data, const char *filename));
+    void (*exec_on_files) (const char *directory, int hidden_files,
+                           void (*callback)(void *data, const char *filename),
+                           void *callback_data);
     char *(*file_get_content) (const char *filename);
 
     /* util */
     int (*util_timeval_cmp) (struct timeval *tv1, struct timeval *tv2);
     long long (*util_timeval_diff) (struct timeval *tv1, struct timeval *tv2);
     void (*util_timeval_add) (struct timeval *tv, long long interval);
-    char *(*util_get_time_string) (const time_t *date);
+    const char *(*util_get_time_string) (const time_t *date);
     int (*util_version_number) (const char *version);
 
     /* sorted lists */
@@ -420,37 +435,49 @@ struct t_weechat_plugin
     /* config files */
     struct t_config_file *(*config_new) (struct t_weechat_plugin *plugin,
                                          const char *name,
-                                         int (*callback_reload)(void *data,
+                                         int (*callback_reload)(const void *pointer,
+                                                                void *data,
                                                                 struct t_config_file *config_file),
+                                         const void *callback_reload_pointer,
                                          void *callback_reload_data);
     struct t_config_section *(*config_new_section) (struct t_config_file *config_file,
                                                     const char *name,
                                                     int user_can_add_options,
                                                     int user_can_delete_options,
-                                                    int (*callback_read)(void *data,
+                                                    int (*callback_read)(const void *pointer,
+                                                                         void *data,
                                                                          struct t_config_file *config_file,
                                                                          struct t_config_section *section,
                                                                          const char *option_name,
                                                                          const char *value),
+                                                    const void *callback_read_pointer,
                                                     void *callback_read_data,
-                                                    int (*callback_write)(void *data,
+                                                    int (*callback_write)(const void *pointer,
+                                                                          void *data,
                                                                           struct t_config_file *config_file,
                                                                           const char *section_name),
+                                                    const void *callback_write_pointer,
                                                     void *callback_write_data,
-                                                    int (*callback_write_default)(void *data,
+                                                    int (*callback_write_default)(const void *pointer,
+                                                                                  void *data,
                                                                                   struct t_config_file *config_file,
                                                                                   const char *section_name),
+                                                    const void *callback_write_default_pointer,
                                                     void *callback_write_default_data,
-                                                    int (*callback_create_option)(void *data,
+                                                    int (*callback_create_option)(const void *pointer,
+                                                                                  void *data,
                                                                                   struct t_config_file *config_file,
                                                                                   struct t_config_section *section,
                                                                                   const char *option_name,
                                                                                   const char *value),
+                                                    const void *callback_create_option_pointer,
                                                     void *callback_create_option_data,
-                                                    int (*callback_delete_option)(void *data,
+                                                    int (*callback_delete_option)(const void *pointer,
+                                                                                  void *data,
                                                                                   struct t_config_file *config_file,
                                                                                   struct t_config_section *section,
                                                                                   struct t_config_option *option),
+                                                    const void *callback_delete_option_pointer,
                                                     void *callback_delete_option_data);
     struct t_config_section *(*config_search_section) (struct t_config_file *config_file,
                                                        const char *section_name);
@@ -465,15 +492,21 @@ struct t_weechat_plugin
                                                   const char *default_value,
                                                   const char *value,
                                                   int null_value_allowed,
-                                                  int (*callback_check_value)(void *data,
+                                                  int (*callback_check_value)(const void *pointer,
+                                                                              void *data,
                                                                               struct t_config_option *option,
                                                                               const char *value),
+                                                  const void *callback_check_value_pointer,
                                                   void *callback_check_value_data,
-                                                  void (*callback_change)(void *data,
+                                                  void (*callback_change)(const void *pointer,
+                                                                          void *data,
                                                                           struct t_config_option *option),
+                                                  const void *callback_change_pointer,
                                                   void *callback_change_data,
-                                                  void (*callback_delete)(void *data,
+                                                  void (*callback_delete)(const void *pointer,
+                                                                          void *data,
                                                                           struct t_config_option *option),
+                                                  const void *callback_delete_pointer,
                                                   void *callback_delete_data);
     struct t_config_option *(*config_search_option) (struct t_config_file *config_file,
                                                      struct t_config_section *section,
@@ -555,49 +588,62 @@ struct t_weechat_plugin
                                     const char *args,
                                     const char *args_description,
                                     const char *completion,
-                                    int (*callback)(void *data,
+                                    int (*callback)(const void *pointer,
+                                                    void *data,
                                                     struct t_gui_buffer *buffer,
                                                     int argc, char **argv,
                                                     char **argv_eol),
+                                    const void *callback_pointer,
                                     void *callback_data);
     struct t_hook *(*hook_command_run) (struct t_weechat_plugin *plugin,
                                         const char *command,
-                                        int (*callback)(void *data,
+                                        int (*callback)(const void *pointer,
+                                                        void *data,
                                                         struct t_gui_buffer *buffer,
                                                         const char *command),
+                                        const void *callback_pointer,
                                         void *callback_data);
     struct t_hook *(*hook_timer) (struct t_weechat_plugin *plugin,
                                   long interval,
                                   int align_second,
                                   int max_calls,
-                                  int (*callback)(void *data,
+                                  int (*callback)(const void *pointer,
+                                                  void *data,
                                                   int remaining_calls),
+                                  const void *callback_pointer,
                                   void *callback_data);
     struct t_hook *(*hook_fd) (struct t_weechat_plugin *plugin,
                                int fd,
                                int flag_read,
                                int flag_write,
                                int flag_exception,
-                               int (*callback)(void *data, int fd),
+                               int (*callback)(const void *pointer,
+                                               void *data,
+                                               int fd),
+                               const void *callback_pointer,
                                void *callback_data);
     struct t_hook *(*hook_process) (struct t_weechat_plugin *plugin,
                                     const char *command,
                                     int timeout,
-                                    int (*callback)(void *data,
+                                    int (*callback)(const void *pointer,
+                                                    void *data,
                                                     const char *command,
                                                     int return_code,
                                                     const char *out,
                                                     const char *err),
+                                    const void *callback_pointer,
                                     void *callback_data);
     struct t_hook *(*hook_process_hashtable) (struct t_weechat_plugin *plugin,
                                               const char *command,
                                               struct t_hashtable *options,
                                               int timeout,
-                                              int (*callback)(void *data,
+                                              int (*callback)(const void *pointer,
+                                                              void *data,
                                                               const char *command,
                                                               int return_code,
                                                               const char *out,
                                                               const char *err),
+                                              const void *callback_pointer,
                                               void *callback_data);
     struct t_hook *(*hook_connect) (struct t_weechat_plugin *plugin,
                                     const char *proxy,
@@ -609,19 +655,22 @@ struct t_weechat_plugin
                                     int gnutls_dhkey_size,
                                     const char *gnutls_priorities,
                                     const char *local_hostname,
-                                    int (*callback)(void *data,
+                                    int (*callback)(const void *pointer,
+                                                    void *data,
                                                     int status,
                                                     int gnutls_rc,
                                                     int sock,
                                                     const char *error,
                                                     const char *ip_address),
+                                    const void *callback_pointer,
                                     void *callback_data);
     struct t_hook *(*hook_print) (struct t_weechat_plugin *plugin,
                                   struct t_gui_buffer *buffer,
                                   const char *tags,
                                   const char *message,
                                   int strip_colors,
-                                  int (*callback)(void *data,
+                                  int (*callback)(const void *pointer,
+                                                  void *data,
                                                   struct t_gui_buffer *buffer,
                                                   time_t date,
                                                   int tags_count,
@@ -630,37 +679,46 @@ struct t_weechat_plugin
                                                   int highlight,
                                                   const char *prefix,
                                                   const char *message),
+                                  const void *callback_pointer,
                                   void *callback_data);
     struct t_hook *(*hook_signal) (struct t_weechat_plugin *plugin,
                                    const char *signal,
-                                   int (*callback)(void *data,
+                                   int (*callback)(const void *pointer,
+                                                   void *data,
                                                    const char *signal,
                                                    const char *type_data,
                                                    void *signal_data),
+                                   const void *callback_pointer,
                                    void *callback_data);
     int (*hook_signal_send) (const char *signal, const char *type_data,
                              void *signal_data);
     struct t_hook *(*hook_hsignal) (struct t_weechat_plugin *plugin,
                                     const char *signal,
-                                    int (*callback)(void *data,
+                                    int (*callback)(const void *pointer,
+                                                    void *data,
                                                     const char *signal,
                                                     struct t_hashtable *hashtable),
+                                    const void *callback_pointer,
                                     void *callback_data);
     int (*hook_hsignal_send) (const char *signal,
                               struct t_hashtable *hashtable);
     struct t_hook *(*hook_config) (struct t_weechat_plugin *plugin,
                                    const char *option,
-                                   int (*callback)(void *data,
+                                   int (*callback)(const void *pointer,
+                                                   void *data,
                                                    const char *option,
                                                    const char *value),
+                                   const void *callback_pointer,
                                    void *callback_data);
     struct t_hook *(*hook_completion) (struct t_weechat_plugin *plugin,
                                        const char *completion_item,
                                        const char *description,
-                                       int (*callback)(void *data,
+                                       int (*callback)(const void *pointer,
+                                                       void *data,
                                                        const char *completion_item,
                                                        struct t_gui_buffer *buffer,
                                                        struct t_gui_completion *completion),
+                                       const void *callback_pointer,
                                        void *callback_data);
     const char *(*hook_completion_get_string) (struct t_gui_completion *completion,
                                                const char *property);
@@ -670,10 +728,12 @@ struct t_weechat_plugin
                                       const char *where);
     struct t_hook *(*hook_modifier) (struct t_weechat_plugin *plugin,
                                      const char *modifier,
-                                     char *(*callback)(void *data,
+                                     char *(*callback)(const void *pointer,
+                                                       void *data,
                                                        const char *modifier,
                                                        const char *modifier_data,
                                                        const char *string),
+                                     const void *callback_pointer,
                                      void *callback_data);
     char *(*hook_modifier_exec) (struct t_weechat_plugin *plugin,
                                  const char *modifier,
@@ -683,54 +743,69 @@ struct t_weechat_plugin
                                  const char *info_name,
                                  const char *description,
                                  const char *args_description,
-                                 const char *(*callback)(void *data,
+                                 const char *(*callback)(const void *pointer,
+                                                         void *data,
                                                          const char *info_name,
                                                          const char *arguments),
+                                 const void *callback_pointer,
                                  void *callback_data);
     struct t_hook *(*hook_info_hashtable) (struct t_weechat_plugin *plugin,
                                            const char *info_name,
                                            const char *description,
                                            const char *args_description,
                                            const char *output_description,
-                                           struct t_hashtable *(*callback)(void *data,
+                                           struct t_hashtable *(*callback)(const void *pointer,
+                                                                           void *data,
                                                                            const char *info_name,
                                                                            struct t_hashtable *hashtable),
+                                           const void *callback_pointer,
                                            void *callback_data);
     struct t_hook *(*hook_infolist) (struct t_weechat_plugin *plugin,
                                      const char *infolist_name,
                                      const char *description,
                                      const char *pointer_description,
                                      const char *args_description,
-                                     struct t_infolist *(*callback)(void *data,
+                                     struct t_infolist *(*callback)(const void *cb_pointer,
+                                                                    void *data,
                                                                     const char *infolist_name,
-                                                                    void *pointer,
+                                                                    void *obj_pointer,
                                                                     const char *arguments),
+                                     const void *callback_pointer,
                                      void *callback_data);
     struct t_hook *(*hook_hdata) (struct t_weechat_plugin *plugin,
                                   const char *hdata_name,
                                   const char *description,
-                                  struct t_hdata *(*callback)(void *data,
+                                  struct t_hdata *(*callback)(const void *pointer,
+                                                              void *data,
                                                               const char *hdata_name),
+                                  const void *callback_pointer,
                                   void *callback_data);
     struct t_hook *(*hook_focus) (struct t_weechat_plugin *plugin,
                                   const char *area,
-                                  struct t_hashtable *(*callback)(void *data,
+                                  struct t_hashtable *(*callback)(const void *pointer,
+                                                                  void *data,
                                                                   struct t_hashtable *info),
+                                  const void *callback_pointer,
                                   void *callback_data);
     void (*hook_set) (struct t_hook *hook, const char *property,
                       const char *value);
     void (*unhook) (struct t_hook *hook);
-    void (*unhook_all) (struct t_weechat_plugin *plugin);
+    void (*unhook_all) (struct t_weechat_plugin *plugin,
+                        const char *subplugin);
 
     /* buffers */
     struct t_gui_buffer *(*buffer_new) (struct t_weechat_plugin *plugin,
                                         const char *name,
-                                        int (*input_callback)(void *data,
+                                        int (*input_callback)(const void *pointer,
+                                                              void *data,
                                                               struct t_gui_buffer *buffer,
                                                               const char *input_data),
+                                        const void *input_callback_pointer,
                                         void *input_callback_data,
-                                        int (*close_callback)(void *data,
+                                        int (*close_callback)(const void *pointer,
+                                                              void *data,
                                                               struct t_gui_buffer *buffer),
+                                        const void *close_callback_pointer,
                                         void *close_callback_data);
     struct t_gui_buffer *(*buffer_search) (const char *plugin, const char *name);
     struct t_gui_buffer *(*buffer_search_main) ();
@@ -819,11 +894,13 @@ struct t_weechat_plugin
     struct t_gui_bar_item *(*bar_item_search) (const char *name);
     struct t_gui_bar_item *(*bar_item_new) (struct t_weechat_plugin *plugin,
                                             const char *name,
-                                            char *(*build_callback)(void *data,
+                                            char *(*build_callback)(const void *pointer,
+                                                                    void *data,
                                                                     struct t_gui_bar_item *item,
                                                                     struct t_gui_window *window,
                                                                     struct t_gui_buffer *buffer,
                                                                     struct t_hashtable *extra_info),
+                                            const void *build_callback_pointer,
                                             void *build_callback_data);
     void (*bar_item_update) (const char *name);
     void (*bar_item_remove) (struct t_gui_bar_item *item);
@@ -965,16 +1042,17 @@ struct t_weechat_plugin
 
     /* upgrade */
     struct t_upgrade_file *(*upgrade_new) (const char *filename,
-                                           int write);
+                                           int (*callback_read)(const void *pointer,
+                                                                void *data,
+                                                                struct t_upgrade_file *upgrade_file,
+                                                                int object_id,
+                                                                struct t_infolist *infolist),
+                                           const void *callback_read_pointer,
+                                           void *callback_read_data);
     int (*upgrade_write_object) (struct t_upgrade_file *upgrade_file,
                                  int object_id,
                                  struct t_infolist *infolist);
-    int (*upgrade_read) (struct t_upgrade_file *upgrade_file,
-                         int (*callback_read)(void *data,
-                                              struct t_upgrade_file *upgrade_file,
-                                              int object_id,
-                                              struct t_infolist *infolist),
-                         void *callback_read_data);
+    int (*upgrade_read) (struct t_upgrade_file *upgrade_file);
     void (*upgrade_close) (struct t_upgrade_file *upgrade_file);
 };
 
@@ -1040,6 +1118,10 @@ extern int weechat_plugin_end (struct t_weechat_plugin *plugin);
     (weechat_plugin->string_replace)(__string, __search, __replace)
 #define weechat_string_expand_home(__path)                              \
     (weechat_plugin->string_expand_home)(__path)
+#define weechat_string_eval_path_home(__path, __pointers,               \
+                                      __extra_vars, __options)          \
+    (weechat_plugin->string_eval_path_home)(__path, __pointers,         \
+                                            __extra_vars, __options)
 #define weechat_string_remove_quotes(__string, __quotes)                \
     (weechat_plugin->string_remove_quotes)(__string, __quotes)
 #define weechat_string_strip(__string, __left, __right, __chars)        \
@@ -1089,6 +1171,11 @@ extern int weechat_plugin_end (struct t_weechat_plugin *plugin);
     (weechat_plugin->string_encode_base64)(__from, __length, __to)
 #define weechat_string_decode_base64(__from, __to)                      \
     (weechat_plugin->string_decode_base64)(__from, __to)
+#define weechat_string_hex_dump(__data, __data_size, __bytes_per_line,  \
+                                __prefix, __suffix)                     \
+    (weechat_plugin->string_hex_dump)(__data, __data_size,              \
+                                      __bytes_per_line, __prefix,       \
+                                      __suffix)
 #define weechat_string_is_command_char(__string)                        \
     (weechat_plugin->string_is_command_char)(__string)
 #define weechat_string_input_for_buffer(__string)                       \
@@ -1101,8 +1188,8 @@ extern int weechat_plugin_end (struct t_weechat_plugin *plugin);
 /* UTF-8 strings */
 #define weechat_utf8_has_8bits(__string)                                \
     (weechat_plugin->utf8_has_8bits)(__string)
-#define weechat_utf8_is_valid(__string, __error)                        \
-    (weechat_plugin->utf8_is_valid)(__string, __error)
+#define weechat_utf8_is_valid(__string, __length, __error)              \
+    (weechat_plugin->utf8_is_valid)(__string, __length, __error)
 #define weechat_utf8_normalize(__string, __char)                        \
     (weechat_plugin->utf8_normalize)(__string, __char)
 #define weechat_utf8_prev_char(__start, __string)                       \
@@ -1141,10 +1228,10 @@ extern int weechat_plugin_end (struct t_weechat_plugin *plugin);
     (weechat_plugin->mkdir)(__directory, __mode)
 #define weechat_mkdir_parents(__directory, __mode)                      \
     (weechat_plugin->mkdir_parents)(__directory, __mode)
-#define weechat_exec_on_files(__directory, __hidden_files, __data,      \
-                              __callback)                               \
+#define weechat_exec_on_files(__directory, __hidden_files, __callback,  \
+                              __callback_data)                          \
     (weechat_plugin->exec_on_files)(__directory, __hidden_files,        \
-                                    __data, __callback)
+                                    __callback, __callback_data)
 #define weechat_file_get_content(__filename)                            \
     (weechat_plugin->file_get_content)(__filename)
 
@@ -1194,9 +1281,10 @@ extern int weechat_plugin_end (struct t_weechat_plugin *plugin);
 
 /* hash tables */
 #define weechat_hashtable_new(__size, __type_keys, __type_values,       \
-                              __hash_key_cb, __keycmp_cb)               \
+                              __callback_hash_key, __callback_keycmp)   \
     (weechat_plugin->hashtable_new)(__size, __type_keys, __type_values, \
-                                    __hash_key_cb, __keycmp_cb)
+                                    __callback_hash_key,                \
+                                    __callback_keycmp)
 #define weechat_hashtable_set_with_size(__hashtable, __key, __key_size, \
                                         __value, __value_size)          \
     (weechat_plugin->hashtable_set_with_size)(__hashtable, __key,       \
@@ -1239,31 +1327,47 @@ extern int weechat_plugin_end (struct t_weechat_plugin *plugin);
 
 /* config files */
 #define weechat_config_new(__name, __callback_reload,                   \
+                           __callback_reload_pointer,                   \
                            __callback_reload_data)                      \
     (weechat_plugin->config_new)(weechat_plugin, __name,                \
                                  __callback_reload,                     \
+                                 __callback_reload_pointer,             \
                                  __callback_reload_data)
 #define weechat_config_new_section(__config, __name,                    \
                                    __user_can_add_options,              \
                                    __user_can_delete_options,           \
-                                   __cb_read, __cb_read_data,           \
-                                   __cb_write_std, __cb_write_std_data, \
-                                   __cb_write_def, __cb_write_def_data, \
+                                   __cb_read,                           \
+                                   __cb_read_pointer,                   \
+                                   __cb_read_data,                      \
+                                   __cb_write_std,                      \
+                                   __cb_write_std_pointer,              \
+                                   __cb_write_std_data,                 \
+                                   __cb_write_def,                      \
+                                   __cb_write_def_pointer,              \
+                                   __cb_write_def_data,                 \
                                    __cb_create_option,                  \
+                                   __cb_create_option_pointer,          \
                                    __cb_create_option_data,             \
                                    __cb_delete_option,                  \
+                                   __cb_delete_option_pointer,          \
                                    __cb_delete_option_data)             \
     (weechat_plugin->config_new_section)(__config, __name,              \
                                          __user_can_add_options,        \
                                          __user_can_delete_options,     \
-                                         __cb_read, __cb_read_data,     \
+                                         __cb_read,                     \
+                                         __cb_read_pointer,             \
+                                         __cb_read_data,                \
                                          __cb_write_std,                \
+                                         __cb_write_std_pointer,        \
                                          __cb_write_std_data,           \
                                          __cb_write_def,                \
+                                         __cb_write_def_pointer,        \
                                          __cb_write_def_data,           \
                                          __cb_create_option,            \
+                                         __cb_create_option_pointer,    \
                                          __cb_create_option_data,       \
                                          __cb_delete_option,            \
+                                         __cb_delete_option_pointer,    \
                                          __cb_delete_option_data)
 #define weechat_config_search_section(__config, __name)                 \
     (weechat_plugin->config_search_section)(__config, __name)
@@ -1272,10 +1376,13 @@ extern int weechat_plugin_end (struct t_weechat_plugin *plugin);
                                   __max, __default, __value,            \
                                   __null_value_allowed,                 \
                                   __callback_check,                     \
+                                  __callback_check_pointer,             \
                                   __callback_check_data,                \
                                   __callback_change,                    \
+                                  __callback_change_pointer,            \
                                   __callback_change_data,               \
                                   __callback_delete,                    \
+                                  __callback_delete_pointer,            \
                                   __callback_delete_data)               \
     (weechat_plugin->config_new_option)(__config, __section, __name,    \
                                         __type, __desc,                 \
@@ -1284,10 +1391,13 @@ extern int weechat_plugin_end (struct t_weechat_plugin *plugin);
                                         __value,                        \
                                         __null_value_allowed,           \
                                         __callback_check,               \
+                                        __callback_check_pointer,       \
                                         __callback_check_data,          \
                                         __callback_change,              \
+                                        __callback_change_pointer,      \
                                         __callback_change_data,         \
                                         __callback_delete,              \
+                                        __callback_delete_pointer,      \
                                         __callback_delete_data)
 #define weechat_config_search_option(__config, __section, __name)       \
     (weechat_plugin->config_search_option)(__config, __section, __name)
@@ -1403,69 +1513,75 @@ extern int weechat_plugin_end (struct t_weechat_plugin *plugin);
 /* hooks */
 #define weechat_hook_command(__command, __description, __args,          \
                              __args_desc, __completion, __callback,     \
-                             __data)                                    \
+                             __pointer, __data)                         \
     (weechat_plugin->hook_command)(weechat_plugin, __command,           \
                                    __description, __args, __args_desc,  \
-                                   __completion, __callback, __data)
-#define weechat_hook_command_run(__command, __callback, __data)         \
+                                   __completion, __callback, __pointer, \
+                                   __data)
+#define weechat_hook_command_run(__command, __callback, __pointer,      \
+                                 __data)                                \
     (weechat_plugin->hook_command_run)(weechat_plugin, __command,       \
-                                       __callback, __data)
+                                       __callback, __pointer, __data)
 #define weechat_hook_timer(__interval, __align_second, __max_calls,     \
-                           __callback, __data)                          \
+                           __callback, __pointer, __data)               \
     (weechat_plugin->hook_timer)(weechat_plugin, __interval,            \
                                  __align_second, __max_calls,           \
-                                 __callback, __data)
+                                 __callback, __pointer, __data)
 #define weechat_hook_fd(__fd, __flag_read, __flag_write,                \
-                        __flag_exception, __callback, __data)           \
+                        __flag_exception, __callback, __pointer,        \
+                        __data)                                         \
     (weechat_plugin->hook_fd)(weechat_plugin, __fd, __flag_read,        \
                               __flag_write, __flag_exception,           \
-                              __callback, __data)
+                              __callback, __pointer, __data)
 #define weechat_hook_process(__command, __timeout, __callback,          \
-                             __callback_data)                           \
+                             __callback_pointer, __callback_data)       \
     (weechat_plugin->hook_process)(weechat_plugin, __command,           \
                                    __timeout, __callback,               \
-                                   __callback_data)
+                                   __callback_pointer, __callback_data)
 #define weechat_hook_process_hashtable(__command, __options, __timeout, \
-                                       __callback, __callback_data)     \
+                                       __callback, __callback_pointer,  \
+                                       __callback_data)                 \
     (weechat_plugin->hook_process_hashtable)(weechat_plugin, __command, \
                                              __options, __timeout,      \
                                              __callback,                \
+                                             __callback_pointer,        \
                                              __callback_data)
 #define weechat_hook_connect(__proxy, __address, __port, __ipv6,        \
                              __retry, __gnutls_sess, __gnutls_cb,       \
                              __gnutls_dhkey_size, __gnutls_priorities,  \
-                             __local_hostname, __callback, __data)      \
+                             __local_hostname, __callback, __pointer,   \
+                             __data)                                    \
     (weechat_plugin->hook_connect)(weechat_plugin, __proxy, __address,  \
                                    __port, __ipv6, __retry,             \
                                    __gnutls_sess, __gnutls_cb,          \
                                    __gnutls_dhkey_size,                 \
                                    __gnutls_priorities,                 \
                                    __local_hostname,                    \
-                                   __callback, __data)
+                                   __callback, __pointer, __data)
 #define weechat_hook_print(__buffer, __tags, __msg, __strip__colors,    \
-                           __callback, __data)                          \
+                           __callback, __pointer, __data)               \
     (weechat_plugin->hook_print)(weechat_plugin, __buffer, __tags,      \
                                  __msg, __strip__colors, __callback,    \
-                                 __data)
-#define weechat_hook_signal(__signal, __callback, __data)               \
+                                 __pointer, __data)
+#define weechat_hook_signal(__signal, __callback, __pointer, __data)    \
     (weechat_plugin->hook_signal)(weechat_plugin, __signal, __callback, \
-                                  __data)
+                                  __pointer, __data)
 #define weechat_hook_signal_send(__signal, __type_data, __signal_data)  \
     (weechat_plugin->hook_signal_send)(__signal, __type_data,           \
                                        __signal_data)
-#define weechat_hook_hsignal(__signal, __callback, __data)              \
+#define weechat_hook_hsignal(__signal, __callback, __pointer, __data)   \
     (weechat_plugin->hook_hsignal)(weechat_plugin, __signal,            \
-                                   __callback, __data)
+                                   __callback, __pointer, __data)
 #define weechat_hook_hsignal_send(__signal, __hashtable)                \
     (weechat_plugin->hook_hsignal_send)(__signal, __hashtable)
-#define weechat_hook_config(__option, __callback, __data)               \
+#define weechat_hook_config(__option, __callback, __pointer, __data)    \
     (weechat_plugin->hook_config)(weechat_plugin, __option, __callback, \
-                                  __data)
+                                  __pointer, __data)
 #define weechat_hook_completion(__completion, __description,            \
-                                __callback, __data)                     \
+                                __callback, __pointer, __data)          \
     (weechat_plugin->hook_completion)(weechat_plugin, __completion,     \
                                       __description, __callback,        \
-                                      __data)
+                                      __pointer, __data)
 #define weechat_hook_completion_get_string(__completion, __property)    \
     (weechat_plugin->hook_completion_get_string)(__completion,          \
                                                  __property)
@@ -1474,58 +1590,69 @@ extern int weechat_plugin_end (struct t_weechat_plugin *plugin);
     (weechat_plugin->hook_completion_list_add)(__completion, __word,    \
                                                __nick_completion,       \
                                                __where)
-#define weechat_hook_modifier(__modifier, __callback, __data)           \
+#define weechat_hook_modifier(__modifier, __callback, __pointer,        \
+                              __data)                                   \
     (weechat_plugin->hook_modifier)(weechat_plugin, __modifier,         \
-                                    __callback, __data)
+                                    __callback, __pointer, __data)
 #define weechat_hook_modifier_exec(__modifier, __modifier_data,         \
                                    __string)                            \
     (weechat_plugin->hook_modifier_exec)(weechat_plugin, __modifier,    \
                                          __modifier_data, __string)
 #define weechat_hook_info(__info_name, __description,                   \
-                          __args_description, __callback, __data)       \
+                          __args_description, __callback, __pointer,    \
+                          __data)                                       \
     (weechat_plugin->hook_info)(weechat_plugin, __info_name,            \
-                              __description, __args_description,        \
-                              __callback, __data)
+                                __description, __args_description,      \
+                                __callback, __pointer, __data)
 #define weechat_hook_info_hashtable(__info_name, __description,         \
                                     __args_description,                 \
                                     __output_description,               \
                                     __callback,                         \
+                                    __pointer,                          \
                                     __data)                             \
     (weechat_plugin->hook_info_hashtable)(weechat_plugin, __info_name,  \
                                           __description,                \
                                           __args_description,           \
                                           __output_description,         \
-                                          __callback, __data)
+                                          __callback, __pointer,        \
+                                          __data)
 #define weechat_hook_infolist(__infolist_name, __description,           \
                               __pointer_description,                    \
-                              __args_description, __callback, __data)   \
+                              __args_description, __callback,           \
+                              __pointer, __data)                        \
     (weechat_plugin->hook_infolist)(weechat_plugin, __infolist_name,    \
                                     __description,                      \
                                     __pointer_description,              \
                                     __args_description, __callback,     \
-                                    __data)
+                                    __pointer, __data)
 #define weechat_hook_hdata(__hdata_name, __description, __callback,     \
-                           __data)                                      \
+                           __pointer, __data)                           \
     (weechat_plugin->hook_hdata)(weechat_plugin, __hdata_name,          \
-                                 __description, __callback, __data)
-#define weechat_hook_focus(__area, __callback, __data)                  \
-    (weechat_plugin->hook_focus)(weechat_plugin, __area, __callback,    \
+                                 __description, __callback, __pointer,  \
                                  __data)
+#define weechat_hook_focus(__area, __callback, __pointer, __data)       \
+    (weechat_plugin->hook_focus)(weechat_plugin, __area, __callback,    \
+                                 __pointer, __data)
 #define weechat_hook_set(__hook, __property, __value)                   \
     (weechat_plugin->hook_set)(__hook, __property, __value)
 #define weechat_unhook(__hook)                                          \
     (weechat_plugin->unhook)( __hook)
-#define weechat_unhook_all()                                            \
-    (weechat_plugin->unhook_all_plugin)(weechat_plugin)
+#define weechat_unhook_all(__subplugin)                                 \
+    (weechat_plugin->unhook_all)(weechat_plugin, __subplugin)
 
 /* buffers */
 #define weechat_buffer_new(__name, __input_callback,                    \
-                           __input_callback_data, __close_callback,     \
+                           __input_callback_pointer,                    \
+                           __input_callback_data,                       \
+                           __close_callback,                            \
+                           __close_callback_pointer,                    \
                            __close_callback_data)                       \
     (weechat_plugin->buffer_new)(weechat_plugin, __name,                \
                                  __input_callback,                      \
+                                 __input_callback_pointer,              \
                                  __input_callback_data,                 \
                                  __close_callback,                      \
+                                 __close_callback_pointer,              \
                                  __close_callback_data)
 #define weechat_buffer_search(__plugin, __name)                         \
     (weechat_plugin->buffer_search)(__plugin, __name)
@@ -1629,9 +1756,13 @@ extern int weechat_plugin_end (struct t_weechat_plugin *plugin);
 /* bars */
 #define weechat_bar_item_search(__name)                                 \
     (weechat_plugin->bar_item_search)(__name)
-#define weechat_bar_item_new(__name, __build_callback, __data)          \
+#define weechat_bar_item_new(__name, __build_callback,                  \
+                             __build_callback_pointer,                  \
+                             __build_callback_data)                     \
     (weechat_plugin->bar_item_new)(weechat_plugin, __name,              \
-                                   __build_callback, __data)
+                                   __build_callback,                    \
+                                   __build_callback_pointer,            \
+                                   __build_callback_data)
 #define weechat_bar_item_update(__name)                                 \
     (weechat_plugin->bar_item_update)(__name)
 #define weechat_bar_item_remove(__item)                                 \
@@ -1801,16 +1932,18 @@ extern int weechat_plugin_end (struct t_weechat_plugin *plugin);
     (weechat_plugin->hdata_get_string)(__hdata, __property)
 
 /* upgrade */
-#define weechat_upgrade_new(__filename, __write)                        \
-    (weechat_plugin->upgrade_new)(__filename, __write)
+#define weechat_upgrade_new(__filename, __callback_read,                \
+                            __callback_read_pointer,                    \
+                            __callback_read_data)                       \
+    (weechat_plugin->upgrade_new)(__filename, __callback_read,          \
+                                  __callback_read_pointer,              \
+                                  __callback_read_data)
 #define weechat_upgrade_write_object(__upgrade_file, __object_id,       \
                                      __infolist)                        \
     (weechat_plugin->upgrade_write_object)(__upgrade_file, __object_id, \
                                            __infolist)
-#define weechat_upgrade_read(__upgrade_file, __callback_read,           \
-                             __callback_read_data)                      \
-    (weechat_plugin->upgrade_read)(__upgrade_file, __callback_read,     \
-                                   __callback_read_data)
+#define weechat_upgrade_read(__upgrade_file)                            \
+    (weechat_plugin->upgrade_read)(__upgrade_file)
 #define weechat_upgrade_close(__upgrade_file)                           \
     (weechat_plugin->upgrade_close)(__upgrade_file)
 
