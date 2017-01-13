@@ -1,7 +1,7 @@
 /*
  * weechat-plugin.h - header to compile WeeChat plugins
  *
- * Copyright (C) 2003-2016 Sébastien Helleu <flashcode@flashtux.org>
+ * Copyright (C) 2003-2017 Sébastien Helleu <flashcode@flashtux.org>
  *
  * This file is part of WeeChat, the extensible chat client.
  *
@@ -57,7 +57,7 @@ struct timeval;
  * please change the date with current one; for a second change at same
  * date, increment the 01, otherwise please keep 01.
  */
-#define WEECHAT_PLUGIN_API_VERSION "20160423-01"
+#define WEECHAT_PLUGIN_API_VERSION "20160618-01"
 
 /* macros for defining plugin infos */
 #define WEECHAT_PLUGIN_NAME(__name)                                     \
@@ -1494,12 +1494,6 @@ extern int weechat_plugin_end (struct t_weechat_plugin *plugin);
     (weechat_plugin->color)(__color_name)
 #define weechat_printf(__buffer, __message, __argz...)                  \
     (weechat_plugin->printf_date_tags)(__buffer, 0, NULL, __message,    \
-                                       ##__argz)
-#define weechat_printf_date(__buffer, __date, __message, __argz...)     \
-    (weechat_plugin->printf_date_tags)(__buffer, __date, NULL,          \
-                                       __message, ##__argz)
-#define weechat_printf_tags(__buffer, __tags, __message, __argz...)     \
-    (weechat_plugin->printf_date_tags)(__buffer, 0, __tags, __message,  \
                                        ##__argz)
 #define weechat_printf_date_tags(__buffer, __date, __tags, __message,   \
                                  __argz...)                             \
