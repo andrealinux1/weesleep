@@ -64,7 +64,7 @@ int weechat_plugin_init(struct t_weechat_plugin* plugin, int argc, char* argv[])
     weechat_hashtable_set(options, "buffer_flush", "1");
 
     /* Fork off child process and have weechat notify us whenever it writes anything to stdout. */
-    child_process = weechat_hook_process_hashtable("~/.weechat/plugins/themagic", options, 0, my_process_cb, NULL, NULL);
+    child_process = weechat_hook_process_hashtable("~/.weechat/plugins/themagic", options, 0, my_process_cb, &my_process_cb, NULL);
 
     weechat_hashtable_free(options);
 
